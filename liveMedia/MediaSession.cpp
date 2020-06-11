@@ -23,6 +23,8 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 #include "Locale.hh"
 #include "GroupsockHelper.hh"
 #include <ctype.h>
+#include <iostream>
+//#define FULL_MEDIA_SESSION
 
 ////////// MediaSession //////////
 
@@ -1129,6 +1131,7 @@ Boolean MediaSubsession::parseSDPAttribute_fmtp(char const* sdpLine) {
 	  setAttribute(nameStr);
 	} else {
 	  // <name>=<value>
+	  std::cout << __func__ << " setAttribute " << nameStr << " : " << valueStr << "\n";
 	  setAttribute(nameStr, valueStr);
 	}
       }
@@ -1187,11 +1190,12 @@ Boolean MediaSubsession::createSourceObjects(int useSpecialRTPoffset) {
       // A UDP-packetized stream (*not* a RTP stream)
       fReadSource = BasicUDPSource::createNew(env(), fRTPSocket);
       fRTPSource = NULL; // Note!
-      
+#ifdef FULL_MEDIA_SESSION
       if (strcmp(fCodecName, "MP2T") == 0) { // MPEG-2 Transport Stream
 	fReadSource = MPEG2TransportStreamFramer::createNew(env(), fReadSource);
 	// this sets "durationInMicroseconds" correctly, based on the PCR values
       }
+#endif
     } else {
       // Check "fCodecName" against the set of codecs that we support,
       // and create our RTP source accordingly
@@ -1199,6 +1203,7 @@ Boolean MediaSubsession::createSourceObjects(int useSpecialRTPoffset) {
       // (Also, add more fmts that can be implemented by SimpleRTPSource#####)
       Boolean createSimpleRTPSource = False; // by default; can be changed below
       Boolean doNormalMBitRule = False; // default behavior if "createSimpleRTPSource" is True
+#ifdef FULL_MEDIA_SESSION
       if (strcmp(fCodecName, "QCELP") == 0) { // QCELP audio
 	fReadSource =
 	  QCELPAudioRTPSource::createNew(env(), fRTPSocket, fRTPSource,
@@ -1268,10 +1273,14 @@ Boolean MediaSubsession::createSourceObjects(int useSpecialRTPoffset) {
       } else if (strcmp(fCodecName, "THEORA") == 0) { // Theora video
 	fReadSource = fRTPSource
 	  = TheoraVideoRTPSource::createNew(env(), fRTPSocket, fRTPPayloadFormat);
-      } else if (strcmp(fCodecName, "RAW") == 0) { // Uncompressed raw video (RFC 4175)
+      } else 
+#endif
+      if (strcmp(fCodecName, "RAW") == 0) { // Uncompressed raw video (RFC 4175)
 	fReadSource = fRTPSource
 	  = RawVideoRTPSource::createNew(env(), fRTPSocket, fRTPPayloadFormat, fRTPTimestampFrequency);
-      } else if (strcmp(fCodecName, "VP8") == 0) { // VP8 video
+      } else
+#ifdef FULL_MEDIA_SESSION
+      if (strcmp(fCodecName, "VP8") == 0) { // VP8 video
 	fReadSource = fRTPSource
 	  = VP8VideoRTPSource::createNew(env(), fRTPSocket,
 					 fRTPPayloadFormat,
@@ -1322,7 +1331,9 @@ Boolean MediaSubsession::createSourceObjects(int useSpecialRTPoffset) {
 	  = H263plusVideoRTPSource::createNew(env(), fRTPSocket,
 					      fRTPPayloadFormat,
 					      fRTPTimestampFrequency);
-      } else if (strcmp(fCodecName, "H264") == 0) {
+      } else
+#endif
+      if (strcmp(fCodecName, "H264") == 0) {
 	fReadSource = fRTPSource
 	  = H264VideoRTPSource::createNew(env(), fRTPSocket,
 					  fRTPPayloadFormat,
@@ -1334,7 +1345,9 @@ Boolean MediaSubsession::createSourceObjects(int useSpecialRTPoffset) {
 					  fRTPPayloadFormat,
 					  expectDONFields,
 					  fRTPTimestampFrequency);
-      } else if (strcmp(fCodecName, "DV") == 0) {
+      }
+#ifdef FULL_MEDIA_SESSION
+      else if (strcmp(fCodecName, "DV") == 0) {
 	fReadSource = fRTPSource
 	  = DVVideoRTPSource::createNew(env(), fRTPSocket,
 					fRTPPayloadFormat,
@@ -1373,7 +1386,9 @@ Boolean MediaSubsession::createSourceObjects(int useSpecialRTPoffset) {
 						 fRTPTimestampFrequency,
 						 mimeType);
 	delete[] mimeType;
-      } else if (  strcmp(fCodecName, "PCMU") == 0 // PCM u-law audio
+      }
+#endif
+      else if (  strcmp(fCodecName, "PCMU") == 0 // PCM u-law audio
 		   || strcmp(fCodecName, "GSM") == 0 // GSM audio
 		   || strcmp(fCodecName, "DVI4") == 0 // DVI4 (IMA ADPCM) audio
 		   || strcmp(fCodecName, "PCMA") == 0 // PCM a-law audio
