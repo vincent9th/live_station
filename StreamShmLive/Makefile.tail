@@ -15,10 +15,11 @@ all: $(ALL)
 .$(CPP).$(OBJ):
 	$(CPLUSPLUS_COMPILER) -c $(CPLUSPLUS_FLAGS) $<
 
-OPEN_RTSP_OBJS    = StreamShmRTSP.$(OBJ) StreamShmPlayCommon.$(OBJ)
+OPEN_RTSP_OBJS    = StreamShmRTSP.$(OBJ) StreamShmPlayCommon.$(OBJ) StreamShmRTSPClient.$(OBJ)
 
 StreamShmRTSP.$(CPP):	StreamShmPlayCommon.hh
-StreamShmPlayCommon.$(CPP):	StreamShmPlayCommon.hh
+StreamShmPlayCommon.$(CPP):	StreamShmPlayCommon.hh StreamShmRTSPClient.hh
+StreamShmRTSPClient.$(CPP):	StreamShmRTSPClient.hh
 
 USAGE_ENVIRONMENT_DIR = ../UsageEnvironment
 USAGE_ENVIRONMENT_LIB = $(USAGE_ENVIRONMENT_DIR)/libUsageEnvironment.$(libUsageEnvironment_LIB_SUFFIX)
