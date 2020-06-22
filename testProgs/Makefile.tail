@@ -1,6 +1,6 @@
 ##### End of variables to change
 
-MULTICAST_STREAMER_APPS = testMP3Streamer$(EXE) testMPEG1or2VideoStreamer$(EXE) testMPEG1or2AudioVideoStreamer$(EXE) testMPEG2TransportStreamer$(EXE) testMPEG4VideoStreamer$(EXE) testH264VideoStreamer$(EXE) testH265VideoStreamer$(EXE) testDVVideoStreamer$(EXE) testWAVAudioStreamer$(EXE) testAMRAudioStreamer$(EXE) testMKVStreamer$(EXE) testOggStreamer$(EXE) vobStreamer$(EXE)
+#MULTICAST_STREAMER_APPS = testMP3Streamer$(EXE) testMPEG1or2VideoStreamer$(EXE) testMPEG1or2AudioVideoStreamer$(EXE) testMPEG2TransportStreamer$(EXE) testMPEG4VideoStreamer$(EXE) testH264VideoStreamer$(EXE) testH265VideoStreamer$(EXE) testDVVideoStreamer$(EXE) testWAVAudioStreamer$(EXE) testAMRAudioStreamer$(EXE) testMKVStreamer$(EXE) testOggStreamer$(EXE) vobStreamer$(EXE)
 MULTICAST_RECEIVER_APPS = testMP3Receiver$(EXE) testMPEG1or2VideoReceiver$(EXE) testMPEG2TransportReceiver$(EXE) sapWatch$(EXE)
 MULTICAST_MISC_APPS = testRelay$(EXE) testReplicator$(EXE)
 MULTICAST_APPS = $(MULTICAST_STREAMER_APPS) $(MULTICAST_RECEIVER_APPS) $(MULTICAST_MISC_APPS)
