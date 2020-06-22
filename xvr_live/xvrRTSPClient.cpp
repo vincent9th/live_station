@@ -22,6 +22,12 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 
 #include "liveMedia.hh"
 #include "BasicUsageEnvironment.hh"
+#include <boost/shared_ptr.hpp>
+#include <vector>
+#include "Base64.hh"
+
+//using namespace std;
+//using namespace boost;
 
 // Forward function definitions:
 
@@ -158,10 +164,15 @@ private:
   // redefined virtual functions:
   virtual Boolean continuePlaying();
 
+public:
+  //SPropRecord* video_extra_;
+  std::vector<boost::shared_ptr<SPropRecord> > video_extra_;
+
 private:
   u_int8_t* fReceiveBuffer;
   MediaSubsession& fSubsession;
   char* fStreamId;
+  FILE* file;
 };
 
 #define RTSP_CLIENT_VERBOSITY_LEVEL 1 // by default, print verbose output from each "RTSPClient"
@@ -263,6 +274,38 @@ void setupNextSubsession(RTSPClient* rtspClient) {
   }
 }
 
+unsigned parseSPropParameterSets(std::vector<boost::shared_ptr<SPropRecord> > & video_extra, char const* sPropParameterSetsStr) {
+  unsigned numSPropRecords = 0;
+  
+  // Make a copy of the input string, so we can replace the commas with '\0's:
+  char* inStr = strDup(sPropParameterSetsStr);
+  if (inStr == NULL) {
+    numSPropRecords = 0;
+    return numSPropRecords;
+  }
+
+  // Count the number of commas (and thus the number of parameter sets):
+  numSPropRecords = 1;
+  char* s;
+  for (s = inStr; *s != '\0'; ++s) {
+    if (*s == ',') {
+      ++numSPropRecords;
+      *s = '\0';
+    }
+  }
+
+  s = inStr;
+  for (unsigned i = 0; i < numSPropRecords; ++i) {
+    boost::shared_ptr<SPropRecord> prop_param(new SPropRecord);
+    prop_param->sPropBytes = base64Decode(s, prop_param->sPropLength);
+    video_extra.push_back(prop_param);
+    s += strlen(s) + 1;
+  }
+
+  delete[] inStr;
+  return numSPropRecords;
+}
+
 void continueAfterSETUP(RTSPClient* rtspClient, int resultCode, char* resultString) {
   do {
     UsageEnvironment& env = rtspClient->envir(); // alias
@@ -285,7 +328,17 @@ void continueAfterSETUP(RTSPClient* rtspClient, int resultCode, char* resultStri
     // (This will prepare the data sink to receive data; the actual flow of data from the client won't start happening until later,
     // after we've sent a RTSP "PLAY" command.)
 
-    scs.subsession->sink = xvrDummySink::createNew(env, *scs.subsession, rtspClient->url());
+    xvrDummySink *sink = xvrDummySink::createNew(env, *scs.subsession, rtspClient->url());
+	if (strcmp(scs.subsession->codecName(), "H264") == 0) {
+      unsigned numSPropRecords = parseSPropParameterSets(sink->video_extra_, scs.subsession->fmtp_spropparametersets());
+	}else if (strcmp(scs.subsession->codecName(), "H265") == 0) {
+	  parseSPropParameterSets(sink->video_extra_, scs.subsession->fmtp_spropvps());
+	  parseSPropParameterSets(sink->video_extra_, scs.subsession->fmtp_spropsps());
+	  parseSPropParameterSets(sink->video_extra_, scs.subsession->fmtp_sproppps());
+	}
+
+    scs.subsession->sink = sink;
+    
       // perhaps use your own custom "MediaSink" subclass instead
     if (scs.subsession->sink == NULL) {
       env << *rtspClient << "Failed to create a data sink for the \"" << *scs.subsession
@@ -487,11 +540,21 @@ xvrDummySink::xvrDummySink(UsageEnvironment& env, MediaSubsession& subsession, c
     fSubsession(subsession) {
   fStreamId = strDup(streamId);
   fReceiveBuffer = new u_int8_t[DUMMY_SINK_RECEIVE_BUFFER_SIZE];
+    envir() << fSubsession.mediumName() << "/" << fSubsession.codecName() << "\n";
+    if(!::strcasecmp("video", fSubsession.mediumName())){
+        if(!::strcasecmp("H265", fSubsession.codecName())){
+            file = ::fopen("stream.265", "wb");
+        }else{
+            file = ::fopen("stream.h264", "wb");
+        }
+    }
 }
 
 xvrDummySink::~xvrDummySink() {
   delete[] fReceiveBuffer;
   delete[] fStreamId;
+  if(file)
+    fclose(file);
 }
 
 void xvrDummySink::afterGettingFrame(void* clientData, unsigned frameSize, unsigned numTruncatedBytes,
@@ -504,26 +567,45 @@ void xvrDummySink::afterGettingFrame(void* clientData, unsigned frameSize, unsig
 #define DEBUG_PRINT_EACH_RECEIVED_FRAME 1
 
 void xvrDummySink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes,
-				  struct timeval presentationTime, unsigned /*durationInMicroseconds*/) {
-  // We've just received a frame of data.  (Optionally) print out information about it:
+        struct timeval presentationTime, unsigned /*durationInMicroseconds*/) {
+    // We've just received a frame of data.  (Optionally) print out information about it:
 #ifdef DEBUG_PRINT_EACH_RECEIVED_FRAME
-  if (fStreamId != NULL) envir() << "Stream \"" << fStreamId << "\"; ";
-  envir() << fSubsession.mediumName() << "/" << fSubsession.codecName() << ":\tReceived " << frameSize << " bytes";
-  if (numTruncatedBytes > 0) envir() << " (with " << numTruncatedBytes << " bytes truncated)";
-  char uSecsStr[6+1]; // used to output the 'microseconds' part of the presentation time
-  sprintf(uSecsStr, "%06u", (unsigned)presentationTime.tv_usec);
-  envir() << ".\tPresentation time: " << (int)presentationTime.tv_sec << "." << uSecsStr;
-  if (fSubsession.rtpSource() != NULL && !fSubsession.rtpSource()->hasBeenSynchronizedUsingRTCP()) {
+    if (fStreamId != NULL) envir() << "Stream \"" << fStreamId << "\"; ";
+    envir() << fSubsession.mediumName() << "/" << fSubsession.codecName() << ":\tReceived " << frameSize << " bytes";
+    if (numTruncatedBytes > 0) envir() << " (with " << numTruncatedBytes << " bytes truncated)";
+    char uSecsStr[6+1]; // used to output the 'microseconds' part of the presentation time
+    sprintf(uSecsStr, "%06u", (unsigned)presentationTime.tv_usec);
+    envir() << ".\tPresentation time: " << (int)presentationTime.tv_sec << "." << uSecsStr;
+    if (fSubsession.rtpSource() != NULL && !fSubsession.rtpSource()->hasBeenSynchronizedUsingRTCP()) {
     envir() << "!"; // mark the debugging output to indicate that this presentation time is not RTCP-synchronized
-  }
+    }
 #ifdef DEBUG_PRINT_NPT
-  envir() << "\tNPT: " << fSubsession.getNormalPlayTime(presentationTime);
+    envir() << "\tNPT: " << fSubsession.getNormalPlayTime(presentationTime);
 #endif
-  envir() << "\n";
+    envir() << "\n";
 #endif
-  
-  // Then continue, to request the next frame of data:
-  continuePlaying();
+
+    unsigned char const start_code[4] = {0x00, 0x00, 0x00, 0x01};
+
+    if(!::strcasecmp("video", fSubsession.mediumName()))
+    {
+        envir() << "write len" << frameSize << "\n";
+        if(!::strcasecmp("H265", fSubsession.codecName())
+          || !::strcasecmp("H264", fSubsession.codecName()))
+        {
+            for (std::vector<boost::shared_ptr<SPropRecord> >::iterator iter = video_extra_.begin();
+                    iter != video_extra_.end(); iter++) {
+                boost::shared_ptr<SPropRecord> tmp = *iter;
+                fwrite(start_code, sizeof(start_code), 1, file);
+                fwrite(tmp->sPropBytes, tmp->sPropLength, 1, file);
+                envir() << "sPropLength:" << tmp->sPropLength << "\n";
+            }
+        }
+        fwrite(start_code, sizeof(start_code), 1, file);
+        fwrite(fReceiveBuffer, frameSize, 1, file);
+    }
+    // Then continue, to request the next frame of data:
+    continuePlaying();
 }
 
 Boolean xvrDummySink::continuePlaying() {

@@ -6,8 +6,8 @@ USAGE_ENVIRONMENT_DIR = UsageEnvironment
 BASIC_USAGE_ENVIRONMENT_DIR = BasicUsageEnvironment
 
 #TESTPROGS_DIR = testProgs
-#TESTPROGS_DIR = xvr_live
-TESTPROGS_DIR = StreamShmLive
+#TESTPROGS_DIR = StreamShmLive
+TESTPROGS_DIR = xvr_live
 
 MEDIA_SERVER_DIR = mediaServer
 
