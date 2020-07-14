@@ -111,6 +111,10 @@ typedef unsigned char u_int8_t;
 
 #define closeSocket close
 
+#ifndef SOCKLEN_T
+#define SOCKLEN_T socklen_t
+#endif
+
 #ifdef SOLARIS
 #define u_int64_t uint64_t
 #define u_int32_t uint32_t
