@@ -1,56 +1,23 @@
-/**********
-This library is free software; you can redistribute it and/or modify it under
-the terms of the GNU Lesser General Public License as published by the
-Free Software Foundation; either version 3 of the License, or (at your
-option) any later version. (See <http://www.gnu.org/copyleft/lesser.html>.)
-
-This library is distributed in the hope that it will be useful, but WITHOUT
-ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License for
-more details.
-
-You should have received a copy of the GNU Lesser General Public License
-along with this library; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
-**********/
-// Copyright (c) 1996-2019, Live Networks, Inc.  All rights reserved
-// A demo application, showing how to create and run a RTSP client (that can potentially receive multiple streams concurrently).
-//
-// NOTE: This code - although it builds a running application - is intended only to illustrate how to develop your own RTSP
-// client application.  For a full-featured RTSP client application - with much more functionality, and many options - see
-// "openRTSP": http://www.live555.com/openRTSP/
-
-#include "liveMedia.hh"
-#include "BasicUsageEnvironment.hh"
-#include <boost/shared_ptr.hpp>
-#include <vector>
+#include "uv.h"
 #include "Base64.hh"
+#include "frameshm_manager.h"
+#include "xvrRTSPClient.h"
 
-//using namespace std;
-//using namespace boost;
-
-// Forward function definitions:
+static unsigned rtspClientCount = 0; // Counts how many streams (i.e., "RTSPClient"s) are currently in use.
+static char xvrRTSPClientventLoop = 0;
 
 // RTSP 'response handlers':
-void continueAfterDESCRIBE(RTSPClient* rtspClient, int resultCode, char* resultString);
-void continueAfterSETUP(RTSPClient* rtspClient, int resultCode, char* resultString);
-void continueAfterPLAY(RTSPClient* rtspClient, int resultCode, char* resultString);
+static void continueAfterXvrDESCRIBE(RTSPClient* rtspClient, int resultCode, char* resultString);
+static void continueAfterXvrSETUP(RTSPClient* rtspClient, int resultCode, char* resultString);
+static void continueAfterXvrPLAY(RTSPClient* rtspClient, int resultCode, char* resultString);
 
-// Other event handler functions:
-void subsessionAfterPlaying(void* clientData); // called when a stream's subsession (e.g., audio or video substream) ends
-void subsessionByeHandler(void* clientData, char const* reason);
-  // called when a RTCP "BYE" is received for a subsession
+ // called when a RTCP "BYE" is received for a subsession
 void streamTimerHandler(void* clientData);
   // called at the end of a stream's expected duration (if the stream has not already signaled its end using a RTCP "BYE")
-
-// The main streaming routine (for each "rtsp://" URL):
-void openURL(UsageEnvironment& env, char const* progName, char const* rtspURL);
+void StatusTimerHandler(void* clientData);
 
 // Used to iterate through each stream's 'subsessions', setting up each one:
-void setupNextSubsession(RTSPClient* rtspClient);
-
-// Used to shut down and close a stream (including its "RTSPClient" object):
-void shutdownStream(RTSPClient* rtspClient, int exitCode = 1);
+static void setupNextXvrSubsession(RTSPClient* rtspClient);
 
 // A function that outputs a string that identifies each stream (for debugging output).  Modify this if you wish:
 UsageEnvironment& operator<<(UsageEnvironment& env, const RTSPClient& rtspClient) {
@@ -62,144 +29,44 @@ UsageEnvironment& operator<<(UsageEnvironment& env, const MediaSubsession& subse
   return env << subsession.mediumName() << "/" << subsession.codecName();
 }
 
-void usage(UsageEnvironment& env, char const* progName) {
-  env << "Usage: " << progName << " <rtsp-url-1> ... <rtsp-url-N>\n";
-  env << "\t(where each <rtsp-url-i> is a \"rtsp://\" URL)\n";
+unsigned addRtspClientCont()
+{
+   return ++rtspClientCount;
 }
 
-char eventLoopWatchVariable = 0;
-
-int main(int argc, char** argv) {
-  // Begin by setting up our usage environment:
-  TaskScheduler* scheduler = BasicTaskScheduler::createNew();
-  UsageEnvironment* env = BasicUsageEnvironment::createNew(*scheduler);
-
-  // We need at least one "rtsp://" URL argument:
-  if (argc < 2) {
-    usage(*env, argv[0]);
-    return 1;
-  }
-
-  // There are argc-1 URLs: argv[1] through argv[argc-1].  Open and start streaming each one:
-  for (int i = 1; i <= argc-1; ++i) {
-    openURL(*env, argv[0], argv[i]);
-  }
-
-  // All subsequent activity takes place within the event loop:
-  env->taskScheduler().doEventLoop(&eventLoopWatchVariable);
-    // This function call does not return, unless, at some point in time, "eventLoopWatchVariable" gets set to something non-zero.
-
-  return 0;
-
-  // If you choose to continue the application past this point (i.e., if you comment out the "return 0;" statement above),
-  // and if you don't intend to do anything more with the "TaskScheduler" and "UsageEnvironment" objects,
-  // then you can also reclaim the (small) memory used by these objects by uncommenting the following code:
-  /*
-    env->reclaim(); env = NULL;
-    delete scheduler; scheduler = NULL;
-  */
+unsigned delRtspClientCont()
+{
+   return --rtspClientCount;
 }
 
-// Define a class to hold per-stream state that we maintain throughout each stream's lifetime:
+void xvrRTSPConnectStatusTimer(UsageEnvironment& env, xvrRTSPClient* rtspClient)
+{
+  unsigned uSecsToDelay = (unsigned)10*1000000;
+  rtspClient->stream_recved_flag_ = 1;
+  rtspClient->checkStatusTimerTask = env.taskScheduler().scheduleDelayedTask(uSecsToDelay, (TaskFunc*)StatusTimerHandler, rtspClient);
+}
 
-class xvrStreamClientState {
-public:
-  xvrStreamClientState();
-  virtual ~xvrStreamClientState();
-
-public:
-  MediaSubsessionIterator* iter;
-  MediaSession* session;
-  MediaSubsession* subsession;
-  TaskToken streamTimerTask;
-  double duration;
-};
-
-// If you're streaming just a single stream (i.e., just from a single URL, once), then you can define and use just a single
-// "xvrStreamClientState" structure, as a global variable in your application.  However, because - in this demo application - we're
-// showing how to play multiple streams, concurrently, we can't do that.  Instead, we have to have a separate "xvrStreamClientState"
-// structure for each "RTSPClient".  To do this, we subclass "RTSPClient", and add a "xvrStreamClientState" field to the subclass:
-
-class xvrRTSPClient: public RTSPClient {
-public:
-  static xvrRTSPClient* createNew(UsageEnvironment& env, char const* rtspURL,
-				  int verbosityLevel = 0,
-				  char const* applicationName = NULL,
-				  portNumBits tunnelOverHTTPPortNum = 0);
-
-protected:
-  xvrRTSPClient(UsageEnvironment& env, char const* rtspURL,
-		int verbosityLevel, char const* applicationName, portNumBits tunnelOverHTTPPortNum);
-    // called only by createNew();
-  virtual ~xvrRTSPClient();
-
-public:
-  xvrStreamClientState scs;
-};
-
-// Define a data sink (a subclass of "MediaSink") to receive the data for each subsession (i.e., each audio or video 'substream').
-// In practice, this might be a class (or a chain of classes) that decodes and then renders the incoming audio or video.
-// Or it might be a "FileSink", for outputting the received data into a file (as is done by the "openRTSP" application).
-// In this example code, however, we define a simple 'dummy' sink that receives incoming data, but does nothing with it.
-
-class xvrDummySink: public MediaSink {
-public:
-  static xvrDummySink* createNew(UsageEnvironment& env,
-			      MediaSubsession& subsession, // identifies the kind of data that's being received
-			      char const* streamId = NULL); // identifies the stream itself (optional)
-
-private:
-  xvrDummySink(UsageEnvironment& env, MediaSubsession& subsession, char const* streamId);
-    // called only by "createNew()"
-  virtual ~xvrDummySink();
-
-  static void afterGettingFrame(void* clientData, unsigned frameSize,
-                                unsigned numTruncatedBytes,
-				struct timeval presentationTime,
-                                unsigned durationInMicroseconds);
-  void afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes,
-			 struct timeval presentationTime, unsigned durationInMicroseconds);
-
-private:
-  // redefined virtual functions:
-  virtual Boolean continuePlaying();
-
-public:
-  //SPropRecord* video_extra_;
-  std::vector<boost::shared_ptr<SPropRecord> > video_extra_;
-
-private:
-  u_int8_t* fReceiveBuffer;
-  MediaSubsession& fSubsession;
-  char* fStreamId;
-  FILE* file;
-};
-
-#define RTSP_CLIENT_VERBOSITY_LEVEL 1 // by default, print verbose output from each "RTSPClient"
-
-static unsigned rtspClientCount = 0; // Counts how many streams (i.e., "RTSPClient"s) are currently in use.
-
-void openURL(UsageEnvironment& env, char const* progName, char const* rtspURL) {
+void xvrRTSPClientOpenURL(UsageEnvironment& env, char const* progName, char const* rtspURL) {
   // Begin by creating a "RTSPClient" object.  Note that there is a separate "RTSPClient" object for each stream that we wish
   // to receive (even if more than stream uses the same "rtsp://" URL).
-  RTSPClient* rtspClient = xvrRTSPClient::createNew(env, rtspURL, RTSP_CLIENT_VERBOSITY_LEVEL, progName);
+  xvrRTSPClient* rtspClient = xvrRTSPClient::createNew(env, rtspURL, RTSP_CLIENT_VERBOSITY_LEVEL, progName);
   if (rtspClient == NULL) {
     env << "Failed to create a RTSP client for URL \"" << rtspURL << "\": " << env.getResultMsg() << "\n";
     return;
   }
 
-  ++rtspClientCount;
-
+  addRtspClientCont();
+  
   // Next, send a RTSP "DESCRIBE" command, to get a SDP description for the stream.
   // Note that this command - like all RTSP commands - is sent asynchronously; we do not block, waiting for a response.
   // Instead, the following function call returns immediately, and we handle the RTSP response later, from within the event loop:
-  rtspClient->sendDescribeCommand(continueAfterDESCRIBE); 
+  rtspClient->sendDescribeCommand(continueAfterXvrDESCRIBE); 
 }
 
 
 // Implementation of the RTSP 'response handlers':
 
-void continueAfterDESCRIBE(RTSPClient* rtspClient, int resultCode, char* resultString) {
+void continueAfterXvrDESCRIBE(RTSPClient* rtspClient, int resultCode, char* resultString) {
   do {
     UsageEnvironment& env = rtspClient->envir(); // alias
     xvrStreamClientState& scs = ((xvrRTSPClient*)rtspClient)->scs; // alias
@@ -228,19 +95,15 @@ void continueAfterDESCRIBE(RTSPClient* rtspClient, int resultCode, char* resultS
     // calling "MediaSubsession::initiate()", and then sending a RTSP "SETUP" command, on each one.
     // (Each 'subsession' will have its own data source.)
     scs.iter = new MediaSubsessionIterator(*scs.session);
-    setupNextSubsession(rtspClient);
+    setupNextXvrSubsession(rtspClient);
     return;
   } while (0);
 
   // An unrecoverable error occurred with this stream.
-  shutdownStream(rtspClient);
+  shutdownXvrStream(rtspClient);
 }
 
-// By default, we request that the server stream its data using RTP/UDP.
-// If, instead, you want to request that the server stream via RTP-over-TCP, change the following to True:
-#define REQUEST_STREAMING_OVER_TCP False
-
-void setupNextSubsession(RTSPClient* rtspClient) {
+void setupNextXvrSubsession(RTSPClient* rtspClient) {
   UsageEnvironment& env = rtspClient->envir(); // alias
   xvrStreamClientState& scs = ((xvrRTSPClient*)rtspClient)->scs; // alias
   
@@ -248,7 +111,7 @@ void setupNextSubsession(RTSPClient* rtspClient) {
   if (scs.subsession != NULL) {
     if (!scs.subsession->initiate()) {
       env << *rtspClient << "Failed to initiate the \"" << *scs.subsession << "\" subsession: " << env.getResultMsg() << "\n";
-      setupNextSubsession(rtspClient); // give up on this subsession; go to the next one
+      setupNextXvrSubsession(rtspClient); // give up on this subsession; go to the next one
     } else {
       env << *rtspClient << "Initiated the \"" << *scs.subsession << "\" subsession (";
       if (scs.subsession->rtcpIsMuxed()) {
@@ -259,7 +122,7 @@ void setupNextSubsession(RTSPClient* rtspClient) {
       env << ")\n";
 
       // Continue setting up this subsession, by sending a RTSP "SETUP" command:
-      rtspClient->sendSetupCommand(*scs.subsession, continueAfterSETUP, False, REQUEST_STREAMING_OVER_TCP);
+      rtspClient->sendSetupCommand(*scs.subsession, continueAfterXvrSETUP, False, REQUEST_STREAMING_OVER_TCP);
     }
     return;
   }
@@ -267,10 +130,10 @@ void setupNextSubsession(RTSPClient* rtspClient) {
   // We've finished setting up all of the subsessions.  Now, send a RTSP "PLAY" command to start the streaming:
   if (scs.session->absStartTime() != NULL) {
     // Special case: The stream is indexed by 'absolute' time, so send an appropriate "PLAY" command:
-    rtspClient->sendPlayCommand(*scs.session, continueAfterPLAY, scs.session->absStartTime(), scs.session->absEndTime());
+    rtspClient->sendPlayCommand(*scs.session, continueAfterXvrPLAY, scs.session->absStartTime(), scs.session->absEndTime());
   } else {
     scs.duration = scs.session->playEndTime() - scs.session->playStartTime();
-    rtspClient->sendPlayCommand(*scs.session, continueAfterPLAY);
+    rtspClient->sendPlayCommand(*scs.session, continueAfterXvrPLAY);
   }
 }
 
@@ -306,7 +169,7 @@ unsigned parseSPropParameterSets(std::vector<boost::shared_ptr<SPropRecord> > & 
   return numSPropRecords;
 }
 
-void continueAfterSETUP(RTSPClient* rtspClient, int resultCode, char* resultString) {
+static void continueAfterXvrSETUP(RTSPClient* rtspClient, int resultCode, char* resultString) {
   do {
     UsageEnvironment& env = rtspClient->envir(); // alias
     xvrStreamClientState& scs = ((xvrRTSPClient*)rtspClient)->scs; // alias
@@ -329,14 +192,6 @@ void continueAfterSETUP(RTSPClient* rtspClient, int resultCode, char* resultStri
     // after we've sent a RTSP "PLAY" command.)
 
     xvrDummySink *sink = xvrDummySink::createNew(env, *scs.subsession, rtspClient->url());
-	if (strcmp(scs.subsession->codecName(), "H264") == 0) {
-      unsigned numSPropRecords = parseSPropParameterSets(sink->video_extra_, scs.subsession->fmtp_spropparametersets());
-	}else if (strcmp(scs.subsession->codecName(), "H265") == 0) {
-	  parseSPropParameterSets(sink->video_extra_, scs.subsession->fmtp_spropvps());
-	  parseSPropParameterSets(sink->video_extra_, scs.subsession->fmtp_spropsps());
-	  parseSPropParameterSets(sink->video_extra_, scs.subsession->fmtp_sproppps());
-	}
-
     scs.subsession->sink = sink;
     
       // perhaps use your own custom "MediaSink" subclass instead
@@ -349,19 +204,19 @@ void continueAfterSETUP(RTSPClient* rtspClient, int resultCode, char* resultStri
     env << *rtspClient << "Created a data sink for the \"" << *scs.subsession << "\" subsession\n";
     scs.subsession->miscPtr = rtspClient; // a hack to let subsession handler functions get the "RTSPClient" from the subsession 
     scs.subsession->sink->startPlaying(*(scs.subsession->readSource()),
-				       subsessionAfterPlaying, scs.subsession);
+				       xvrSubsessionAfterPlaying, scs.subsession);
     // Also set a handler to be called if a RTCP "BYE" arrives for this subsession:
     if (scs.subsession->rtcpInstance() != NULL) {
-      scs.subsession->rtcpInstance()->setByeWithReasonHandler(subsessionByeHandler, scs.subsession);
+      scs.subsession->rtcpInstance()->setByeWithReasonHandler(xvrSubsessionByeHandler, scs.subsession);
     }
   } while (0);
   delete[] resultString;
 
   // Set up the next subsession, if any:
-  setupNextSubsession(rtspClient);
+  setupNextXvrSubsession(rtspClient);
 }
 
-void continueAfterPLAY(RTSPClient* rtspClient, int resultCode, char* resultString) {
+void continueAfterXvrPLAY(RTSPClient* rtspClient, int resultCode, char* resultString) {
   Boolean success = False;
 
   do {
@@ -396,14 +251,14 @@ void continueAfterPLAY(RTSPClient* rtspClient, int resultCode, char* resultStrin
 
   if (!success) {
     // An unrecoverable error occurred with this stream.
-    shutdownStream(rtspClient);
+    shutdownXvrStream(rtspClient);
   }
 }
 
 
 // Implementation of the other event handlers:
 
-void subsessionAfterPlaying(void* clientData) {
+void xvrSubsessionAfterPlaying(void* clientData) {
   MediaSubsession* subsession = (MediaSubsession*)clientData;
   RTSPClient* rtspClient = (RTSPClient*)(subsession->miscPtr);
 
@@ -419,10 +274,10 @@ void subsessionAfterPlaying(void* clientData) {
   }
 
   // All subsessions' streams have now been closed, so shutdown the client:
-  shutdownStream(rtspClient);
+  shutdownXvrStream(rtspClient);
 }
 
-void subsessionByeHandler(void* clientData, char const* reason) {
+void xvrSubsessionByeHandler(void* clientData, char const* reason) {
   MediaSubsession* subsession = (MediaSubsession*)clientData;
   RTSPClient* rtspClient = (RTSPClient*)subsession->miscPtr;
   UsageEnvironment& env = rtspClient->envir(); // alias
@@ -435,20 +290,35 @@ void subsessionByeHandler(void* clientData, char const* reason) {
   env << " on \"" << *subsession << "\" subsession\n";
 
   // Now act as if the subsession had closed:
-  subsessionAfterPlaying(subsession);
+  xvrSubsessionAfterPlaying(subsession);
 }
 
 void streamTimerHandler(void* clientData) {
-  xvrRTSPClient* rtspClient = (xvrRTSPClient*)clientData;
+  xvrRTSPClient* rtspClient = static_cast<xvrRTSPClient*>(clientData);
   xvrStreamClientState& scs = rtspClient->scs; // alias
-
   scs.streamTimerTask = NULL;
-
-  // Shut down the stream:
-  shutdownStream(rtspClient);
+  shutdownXvrStream(rtspClient);
 }
 
-void shutdownStream(RTSPClient* rtspClient, int exitCode) {
+void StatusTimerHandler(void* clientData) {
+  xvrRTSPClient* rtspClient = static_cast<xvrRTSPClient*>(clientData);
+  UsageEnvironment& env = rtspClient->envir(); // alias
+
+  if(rtspClient->stream_recved_flag_)
+  {
+    rtspClient->stream_recved_flag_ = 0;
+    
+    unsigned uSecsToDelay = (unsigned)5*1000000;
+    rtspClient->checkStatusTimerTask = env.taskScheduler().scheduleDelayedTask(uSecsToDelay, (TaskFunc*)streamTimerHandler, rtspClient);
+  }
+  else
+  {
+    env << "stream revced timeout and shutdown\n";
+    shutdownXvrStream(rtspClient);
+  }
+}
+
+void shutdownXvrStream(RTSPClient* rtspClient, int exitCode) {
   UsageEnvironment& env = rtspClient->envir(); // alias
   xvrStreamClientState& scs = ((xvrRTSPClient*)rtspClient)->scs; // alias
 
@@ -482,7 +352,7 @@ void shutdownStream(RTSPClient* rtspClient, int exitCode) {
   Medium::close(rtspClient);
     // Note that this will also cause this stream's "xvrStreamClientState" structure to get reclaimed.
 
-  if (--rtspClientCount == 0) {
+  if (delRtspClientCont() == 0) {
     // The final stream has ended, so exit the application now.
     // (Of course, if you're embedding this code into your own application, you might want to comment this out,
     // and replace it with "eventLoopWatchVariable = 1;", so that we leave the LIVE555 event loop, and continue running "main()".)
@@ -529,32 +399,57 @@ xvrStreamClientState::~xvrStreamClientState() {
 
 // Even though we're not going to be doing anything with the incoming data, we still need to receive it.
 // Define the size of the buffer that we'll use:
-#define DUMMY_SINK_RECEIVE_BUFFER_SIZE 100000
+#define DUMMY_SINK_RECEIVE_BUFFER_SIZE (3*1024*1024/8)
 
 xvrDummySink* xvrDummySink::createNew(UsageEnvironment& env, MediaSubsession& subsession, char const* streamId) {
   return new xvrDummySink(env, subsession, streamId);
 }
 
 xvrDummySink::xvrDummySink(UsageEnvironment& env, MediaSubsession& subsession, char const* streamId)
-  : MediaSink(env),
-    fSubsession(subsession) {
+  : MediaSink(env)
+    , fSubsession(subsession)
+    , stream_valid(0)
+    , vframe_no_(0)
+    , aframe_no_(0) {
   fStreamId = strDup(streamId);
-  fReceiveBuffer = new u_int8_t[DUMMY_SINK_RECEIVE_BUFFER_SIZE];
+  //fReceiveBuffer = new u_int8_t[DUMMY_SINK_RECEIVE_BUFFER_SIZE];
+  recv_buffer_.reset(new sg_xvr::Buffer(DUMMY_SINK_RECEIVE_BUFFER_SIZE, 1024));
     envir() << fSubsession.mediumName() << "/" << fSubsession.codecName() << "\n";
     if(!::strcasecmp("video", fSubsession.mediumName())){
         if(!::strcasecmp("H265", fSubsession.codecName())){
-            file = ::fopen("stream.265", "wb");
+#ifdef VIDEO_FILE_TEST
+            fd = ::open("stream.265", O_CREAT | O_RDWR, 666);
+#endif
+        	  parseSPropParameterSets(video_extra_, fSubsession.fmtp_spropvps());
+        	  parseSPropParameterSets(video_extra_, fSubsession.fmtp_spropsps());
+        	  parseSPropParameterSets(video_extra_, fSubsession.fmtp_sproppps());
         }else{
-            file = ::fopen("stream.h264", "wb");
+#ifdef VIDEO_FILE_TEST
+            fd = ::open("stream.H264", O_CREAT | O_RDWR, 666);
+#endif
+            unsigned numSPropRecords = parseSPropParameterSets(video_extra_, fSubsession.fmtp_spropparametersets());
         }
     }
+    
+#ifdef STREAM_SHM_ENABLE
+    //if(!streamshm_handle)
+    {
+      envir() << "create_frameshm_handle\n";
+      streamshm_handle = create_frameshm_handle(STREAM_SHM_SERV_NAME, "av0_0", DUMMY_SINK_RECEIVE_BUFFER_SIZE*3, WRITE_COVER_MODE);
+    }
+#endif
 }
 
 xvrDummySink::~xvrDummySink() {
-  delete[] fReceiveBuffer;
+  //delete[] fReceiveBuffer;
   delete[] fStreamId;
-  if(file)
-    fclose(file);
+#ifdef STREAM_SHM_ENABLE
+  if(streamshm_handle) release_frameshm_handle(streamshm_handle);
+#endif
+#ifdef VIDEO_FILE_TEST
+  if(fd > 0)
+    ::close(fd);
+#endif
 }
 
 void xvrDummySink::afterGettingFrame(void* clientData, unsigned frameSize, unsigned numTruncatedBytes,
@@ -567,53 +462,148 @@ void xvrDummySink::afterGettingFrame(void* clientData, unsigned frameSize, unsig
 #define DEBUG_PRINT_EACH_RECEIVED_FRAME 1
 
 void xvrDummySink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes,
-        struct timeval presentationTime, unsigned /*durationInMicroseconds*/) {
-    // We've just received a frame of data.  (Optionally) print out information about it:
+    struct timeval presentationTime, unsigned /*durationInMicroseconds*/) {
+  // We've just received a frame of data.  (Optionally) print out information about it:
 #ifdef DEBUG_PRINT_EACH_RECEIVED_FRAME
-    if (fStreamId != NULL) envir() << "Stream \"" << fStreamId << "\"; ";
-    envir() << fSubsession.mediumName() << "/" << fSubsession.codecName() << ":\tReceived " << frameSize << " bytes";
-    if (numTruncatedBytes > 0) envir() << " (with " << numTruncatedBytes << " bytes truncated)";
-    char uSecsStr[6+1]; // used to output the 'microseconds' part of the presentation time
-    sprintf(uSecsStr, "%06u", (unsigned)presentationTime.tv_usec);
-    envir() << ".\tPresentation time: " << (int)presentationTime.tv_sec << "." << uSecsStr;
-    if (fSubsession.rtpSource() != NULL && !fSubsession.rtpSource()->hasBeenSynchronizedUsingRTCP()) {
+  if (fStreamId != NULL) envir() << "Stream \"" << fStreamId << "\"; ";
+  envir() << fSubsession.mediumName() << "/" << fSubsession.codecName() << ":\tReceived " << frameSize << " bytes";
+  if (numTruncatedBytes > 0) envir() << " (with " << numTruncatedBytes << " bytes truncated)";
+  char uSecsStr[6+1]; // used to output the 'microseconds' part of the presentation time
+  sprintf(uSecsStr, "%06u", (unsigned)presentationTime.tv_usec);
+  envir() << ".\tPresentation time: " << (int)presentationTime.tv_sec << "." << uSecsStr;
+  if (fSubsession.rtpSource() != NULL && !fSubsession.rtpSource()->hasBeenSynchronizedUsingRTCP()) {
     envir() << "!"; // mark the debugging output to indicate that this presentation time is not RTCP-synchronized
-    }
+  }
 #ifdef DEBUG_PRINT_NPT
-    envir() << "\tNPT: " << fSubsession.getNormalPlayTime(presentationTime);
+  envir() << "\tNPT: " << fSubsession.getNormalPlayTime(presentationTime);
 #endif
-    envir() << "\n";
+  envir() << "\n";
 #endif
 
+  if(!frameSize)
+  {
+    envir() << "frameSize is 0\n";
+    return;
+  }
+
+  recv_buffer_->hasWritten(frameSize);
+
+  STREAM_FRAME_INFO_t frame_info;
+  STREAM_FRAME_DATA_t frame_data;
+  STREAM_FRAME_PACK_t pkt[3];
+  uint8_t is_key = 0;
+  int r;
+  
+  ::memset(&frame_info, 0, sizeof(STREAM_FRAME_INFO_t));
+  ::memset(&frame_data, 0, sizeof(STREAM_FRAME_DATA_t));
+  ::memset(pkt, 0, sizeof(pkt));
+
+  if(!::strcasecmp("video", fSubsession.mediumName()))
+  {
     unsigned char const start_code[4] = {0x00, 0x00, 0x00, 0x01};
+    const char nal_type = *recv_buffer_->peek() & 0x1f;
 
-    if(!::strcasecmp("video", fSubsession.mediumName()))
+    envir() << "nal_type: " << nal_type << " frameSize: " << frameSize << "\n";
+    recv_buffer_->prepend(start_code, sizeof(start_code));
+
+#if 1
+    if(!::strcasecmp("H265", fSubsession.codecName()) && nal_type > 19
+      || !::strcasecmp("H264", fSubsession.codecName()) && nal_type >= 4)
     {
-        envir() << "write len" << frameSize << "\n";
-        if(!::strcasecmp("H265", fSubsession.codecName())
-          || !::strcasecmp("H264", fSubsession.codecName()))
-        {
-            for (std::vector<boost::shared_ptr<SPropRecord> >::iterator iter = video_extra_.begin();
-                    iter != video_extra_.end(); iter++) {
-                boost::shared_ptr<SPropRecord> tmp = *iter;
-                fwrite(start_code, sizeof(start_code), 1, file);
-                fwrite(tmp->sPropBytes, tmp->sPropLength, 1, file);
-                envir() << "sPropLength:" << tmp->sPropLength << "\n";
-            }
-        }
-        fwrite(start_code, sizeof(start_code), 1, file);
-        fwrite(fReceiveBuffer, frameSize, 1, file);
+      const char *nal_hdr = recv_buffer_->peek();
+      for(int i = 0; i < 5; i++)
+      {
+        ::fprintf(stderr, "%02x ", nal_hdr[i]);
+      }
+      ::fprintf(stderr, "\n");
+
+      if(!::strcasecmp("H265", fSubsession.codecName()) && (nal_type == 32 || nal_type == 33 || nal_type == 34)
+        || !::strcasecmp("H264", fSubsession.codecName()) && (nal_type == 7 || nal_type == 8))
+      {
+        envir() << "nal_type: " << nal_type << " skip and continuePlaying" << "\n";
+        recv_buffer_->retrieveAll();
+        continuePlaying();
+        return;
+      }
+
+      is_key = 1;
+      
+      for (std::vector<boost::shared_ptr<SPropRecord> >::iterator iter = video_extra_.begin();
+      iter != video_extra_.end(); iter++) {
+        boost::shared_ptr<SPropRecord> tmp = *iter;
+
+        recv_buffer_->prepend(tmp->sPropBytes, tmp->sPropLength);
+        recv_buffer_->prepend(start_code, sizeof(start_code));
+
+        envir() << "sPropLength:" << tmp->sPropLength << "\n";
+      }
     }
-    // Then continue, to request the next frame of data:
-    continuePlaying();
-}
+#endif
+
+#ifdef VIDEO_FILE_TEST
+    envir() << "write len:" << recv_buffer_->readableBytes() << "\n";
+    ::write(fd, recv_buffer_->peek(), recv_buffer_->readableBytes());
+    //fwrite(recv_buffer_->peek(), recv_buffer_->readableBytes(), 1, file);
+#endif
+
+#ifdef STREAM_SHM_ENABLE
+    frame_info.vench = 0;
+    frame_info.payload = 96;
+    frame_info.frame_type = nal_type;
+    frame_info.frame_no = vframe_no_++;
+    frame_info.frame_size = recv_buffer_->readableBytes();
+    frame_info.key = nal_type > 4 ? 1 : 0;
+    frame_info.timestamp = presentationTime.tv_usec + presentationTime.tv_sec*1000*1000;
+
+    frame_data.pkt_num = 1;
+    frame_data.pkt = pkt;
+    pkt[0].addr = (uint8_t *)recv_buffer_->peek();
+    pkt[0].pkt_size = recv_buffer_->readableBytes();
+    r = write_frameshm_by_handle(streamshm_handle, &frame_info, &frame_data);
+    envir() << "write_frameshm_by_handle key:" << frame_info.key << " r:" << r << "\n";
+#endif
+  }
+  else
+  {
+  }
+  // Then continue, to request the next frame of data:
+
+  xvrRTSPClient* rtspClient = static_cast<xvrRTSPClient*>(fSubsession.miscPtr);
+  rtspClient->stream_recved_flag_ = 1;
+  recv_buffer_->retrieveAll();
+
+  continuePlaying();
+  }
 
 Boolean xvrDummySink::continuePlaying() {
   if (fSource == NULL) return False; // sanity check (should not happen)
 
   // Request the next frame of data from our input source.  "afterGettingFrame()" will get called later, when it arrives:
+#if 0
   fSource->getNextFrame(fReceiveBuffer, DUMMY_SINK_RECEIVE_BUFFER_SIZE,
+                        afterGettingFrame, this,
+                        onSourceClosure, this);
+#endif
+  fSource->getNextFrame((unsigned char*)recv_buffer_->peek(), recv_buffer_->writableBytes(),
                         afterGettingFrame, this,
                         onSourceClosure, this);
   return True;
 }
+
+void xvrRTSPClientTask(void *n)
+{
+    // Begin by setting up our usage environment:
+    TaskScheduler* scheduler = BasicTaskScheduler::createNew();
+    UsageEnvironment* env = BasicUsageEnvironment::createNew(*scheduler);
+
+    xvrRTSPClientOpenURL(*env, "live_station", "rtsp://192.168.3.100");
+    
+    env->taskScheduler().doEventLoop(&xvrRTSPClientventLoop);
+}
+
+void xvrRTSPClientTaskStart()
+{
+    uv_thread_t thread;
+    uv_thread_create(&thread, xvrRTSPClientTask, NULL);
+}
+

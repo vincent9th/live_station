@@ -21,6 +21,10 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 #ifndef _NET_COMMON_H
 #define _NET_COMMON_H
 
+#define LIVE_TAG() do{ \
+    fprintf(stderr, "%s:%s(%d)\n", __FILE__, __FUNCTION__, __LINE__); \
+}while(0)
+
 #if defined(__WIN32__) || defined(_WIN32) || defined(_WIN32_WCE)
 /* Windows */
 #if defined(WINNT) || defined(_WINNT) || defined(__BORLANDC__) || defined(__MINGW32__) || defined(_WIN32_WCE) || defined (_MSC_VER)

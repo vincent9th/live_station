@@ -77,4 +77,6 @@ include_directories(${LIVE_COMM_INCLUDE})
 include_directories(${LIVE_USAGE_ENV_INCLUDE})
 include_directories(${LIVE_LIVEMEDIA_INCLUDE})
 
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DNEWLOCALE_NOT_USED")
+
 add_library(liveMedia_a STATIC ${LIVEMEDIA_LIB_SRCS})
