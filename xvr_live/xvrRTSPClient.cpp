@@ -3,6 +3,10 @@
 #include "frameshm_manager.h"
 #include "xvrRTSPClient.h"
 
+#define STREAM_SHM_SERV_NAME "av_serv"
+//#define VIDEO_FILE_TEST
+#define STREAM_SHM_ENABLE
+
 static unsigned rtspClientCount = 0; // Counts how many streams (i.e., "RTSPClient"s) are currently in use.
 static char xvrRTSPClientventLoop = 0;
 
@@ -399,7 +403,7 @@ xvrStreamClientState::~xvrStreamClientState() {
 
 // Even though we're not going to be doing anything with the incoming data, we still need to receive it.
 // Define the size of the buffer that we'll use:
-#define DUMMY_SINK_RECEIVE_BUFFER_SIZE (3*1024*1024/8)
+#define DUMMY_SINK_RECEIVE_BUFFER_SIZE (10*1024*1024/8)
 
 xvrDummySink* xvrDummySink::createNew(UsageEnvironment& env, MediaSubsession& subsession, char const* streamId) {
   return new xvrDummySink(env, subsession, streamId);
@@ -459,7 +463,7 @@ void xvrDummySink::afterGettingFrame(void* clientData, unsigned frameSize, unsig
 }
 
 // If you don't want to see debugging output for each received frame, then comment out the following line:
-#define DEBUG_PRINT_EACH_RECEIVED_FRAME 1
+//#define DEBUG_PRINT_EACH_RECEIVED_FRAME
 
 void xvrDummySink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes,
     struct timeval presentationTime, unsigned /*durationInMicroseconds*/) {

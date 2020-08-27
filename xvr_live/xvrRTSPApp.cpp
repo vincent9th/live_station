@@ -26,9 +26,6 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 //using namespace boost;
 
 // Forward function definitions:
-#define STREAM_SHM_SERV_NAME "av_serv"
-//#define VIDEO_FILE_TEST
-#define STREAM_SHM_ENABLE
 
 int announce_rtsp(UsageEnvironment& env, char const* progName, char const* rtspURL, char *dsp);
 
@@ -40,7 +37,7 @@ void usage(UsageEnvironment& env, char const* progName) {
 char eventLoopWatchVariable = 0;
 
 int main(int argc, char** argv) {
-#if 0
+#if 1
   // Begin by setting up our usage environment:
   TaskScheduler* scheduler = BasicTaskScheduler::createNew();
   UsageEnvironment* env = BasicUsageEnvironment::createNew(*scheduler);
@@ -54,8 +51,13 @@ int main(int argc, char** argv) {
   // There are argc-1 URLs: argv[1] through argv[argc-1].  Open and start streaming each one:
   //for (int i = 1; i <= argc-1; ++i)
   {
-    //xvrRTSPClientOpenURL(*env, "live_station", argv[1]);
-    
+    xvrRTSPClientOpenURL(*env, "live_station", argv[1]);
+  }
+
+  // All subsequent activity takes place within the event loop:
+  env->taskScheduler().doEventLoop(&eventLoopWatchVariable);
+    // This function call does not return, unless, at some point in time, "eventLoopWatchVariable" gets set to something non-zero.
+#else
     char *dsp = "v=0\r\n"
 "o=freesbell 3805625600 3805625600 IN IP4 192.168.3.100\r\n"
 "s=Session \r\n"
@@ -68,13 +70,6 @@ int main(int argc, char** argv) {
 "a=rtpmap:8 PCMA/8000\r\n"
 "a=control:trackID=1\r\n";
     announce_rtsp(*env, "live_station", argv[1], dsp);
-  }
-
-  // All subsequent activity takes place within the event loop:
-  env->taskScheduler().doEventLoop(&eventLoopWatchVariable);
-    // This function call does not return, unless, at some point in time, "eventLoopWatchVariable" gets set to something non-zero.
-#else
-    xvrRTSPClientTaskStart();
 #endif
 
     return 0;

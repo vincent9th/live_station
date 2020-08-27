@@ -143,70 +143,70 @@ ShmFrameSource::~ShmFrameSource() {
 ShmFrameSource*
  ShmFrameSource::createNew(UsageEnvironment& env, void *frameshm_handle)
 {
-    return new ShmFrameSource(env, frameshm_handle);
+  return new ShmFrameSource(env, frameshm_handle);
 }
 
 void ShmFrameSource::doGetNextFrame() {
-    fprintf(stderr, "%s:%s(%d)yyyyyyyyyyyyyyyyyyyy\n", __FILE__, __FUNCTION__, __LINE__);
+  fprintf(stderr, "%s:%s(%d)yyyyyyyyyyyyyyyyyyyy\n", __FILE__, __FUNCTION__, __LINE__);
 
 #if 0
-    // Begin by reading the 1-byte frame header (and checking it for validity)
-    while (1) {
-        if (fread(&fLastFrameHeader, 1, 1, fFid) < 1) {
-        handleClosure();
-        return;
-        }
-        if ((fLastFrameHeader&0x83) != 0) {
-#ifdef DEBUG
-            fprintf(stderr, "Invalid frame header 0x%02x (padding bits (0x83) are not zero)\n", fLastFrameHeader);
-#endif
-        } else {
-            unsigned char ft = (fLastFrameHeader&0x78)>>3;
-            fFrameSize = fIsWideband ? frameSizeWideband[ft] : frameSize[ft];
-            if (fFrameSize == FT_INVALID) {
-#ifdef DEBUG
-            fprintf(stderr, "Invalid FT field %d (from frame header 0x%02x)\n",
-            ft, fLastFrameHeader);
-#endif
-            } else {
-            // The frame header is OK
-#ifdef DEBUG
-            fprintf(stderr, "Valid frame header 0x%02x -> ft %d -> frame size %d\n", fLastFrameHeader, ft, fFrameSize);
-#endif
-            break;
-            }
-        }
+  // Begin by reading the 1-byte frame header (and checking it for validity)
+  while (1) {
+    if (fread(&fLastFrameHeader, 1, 1, fFid) < 1) {
+    handleClosure();
+    return;
     }
+    if ((fLastFrameHeader&0x83) != 0) {
+#ifdef DEBUG
+        fprintf(stderr, "Invalid frame header 0x%02x (padding bits (0x83) are not zero)\n", fLastFrameHeader);
+#endif
+    } else {
+      unsigned char ft = (fLastFrameHeader&0x78)>>3;
+      fFrameSize = fIsWideband ? frameSizeWideband[ft] : frameSize[ft];
+      if (fFrameSize == FT_INVALID) {
+#ifdef DEBUG
+      fprintf(stderr, "Invalid FT field %d (from frame header 0x%02x)\n",
+      ft, fLastFrameHeader);
+#endif
+      } else {
+      // The frame header is OK
+#ifdef DEBUG
+      fprintf(stderr, "Valid frame header 0x%02x -> ft %d -> frame size %d\n", fLastFrameHeader, ft, fFrameSize);
+#endif
+      break;
+      }
+    }
+  }
 
-    // Next, read the frame-block into the buffer provided:
-    fFrameSize *= fNumChannels; // because multiple channels make up a frame-block
-    if (fFrameSize > fMaxSize) {
+  // Next, read the frame-block into the buffer provided:
+  fFrameSize *= fNumChannels; // because multiple channels make up a frame-block
+  if (fFrameSize > fMaxSize) {
     fNumTruncatedBytes = fFrameSize - fMaxSize;
     fFrameSize = fMaxSize;
-    }
-    fFrameSize = fread(fTo, 1, fFrameSize, fFid);
+  }
+  fFrameSize = fread(fTo, 1, fFrameSize, fFid);
 
-    // Set the 'presentation time':
-    if (fPresentationTime.tv_sec == 0 && fPresentationTime.tv_usec == 0) {
+  // Set the 'presentation time':
+  if (fPresentationTime.tv_sec == 0 && fPresentationTime.tv_usec == 0) {
     // This is the first frame, so use the current time:
     gettimeofday(&fPresentationTime, NULL);
-    } else {
+  } else {
     // Increment by the play time of the previous frame (20 ms)
     unsigned uSeconds	= fPresentationTime.tv_usec + 20000;
     fPresentationTime.tv_sec += uSeconds/1000000;
     fPresentationTime.tv_usec = uSeconds%1000000;
-    }
+  }
 #endif
 
-    const char str[] = "12345678901234567890";
-    strcpy((char*)fTo, str);
-    fFrameSize = sizeof(str);
-    
-    fDurationInMicroseconds = 20000; // each frame is 20 ms
+  const char str[] = "12345678901234567890";
+  strcpy((char*)fTo, str);
+  fFrameSize = sizeof(str);
+  
+  fDurationInMicroseconds = 20000; // each frame is 20 ms
 
-    // Switch to another task, and inform the reader that he has data:
-    nextTask() = envir().taskScheduler().scheduleDelayedTask(0,
-        (TaskFunc*)FramedSource::afterGetting, this);
+  // Switch to another task, and inform the reader that he has data:
+  nextTask() = envir().taskScheduler().scheduleDelayedTask(0,
+      (TaskFunc*)FramedSource::afterGetting, this);
 }
 
 
@@ -218,71 +218,71 @@ void continueAfterXvrPLAY(RTSPClient* rtspClient, int resultCode, char* resultSt
 }
 
 void xvrShmAfterPlaying(void* clientData) {
-    ShmFrameSink *sink = static_cast<ShmFrameSink *>(clientData);
+  ShmFrameSink *sink = static_cast<ShmFrameSink *>(clientData);
 
 }
 
 static void continueAfterXvrShmSETUP(RTSPClient* rtspClient, int resultCode, char* resultString) {
-    do {
-        UsageEnvironment& env = rtspClient->envir(); // alias
-        xvrRTSPAnnounceClient *xvrClient = (xvrRTSPAnnounceClient*)rtspClient;
-        xvrSpeekClientState& scs = xvrClient->scs; // alias
+  do {
+    UsageEnvironment& env = rtspClient->envir(); // alias
+    xvrRTSPAnnounceClient *xvrClient = (xvrRTSPAnnounceClient*)rtspClient;
+    xvrSpeekClientState& scs = xvrClient->scs; // alias
 
-        env << *rtspClient << " SETUP resultString:" << resultString << "\n";
-        
-        if (resultCode != 0) {
-        env << *rtspClient << "Failed to set up \n";
-        break;
-        }
+    env << *rtspClient << " SETUP resultString:" << resultString << "\n";
 
-        env << *rtspClient << __LINE__ << " sendPlayCommand\n";
-    	struct in_addr dummyDestAddress;
-    	dummyDestAddress.s_addr = 0;
-	    Groupsock* rtpGroupsock = new Groupsock(env, dummyDestAddress, 0, 0);
-        ShmFrameSink *sink = ShmFrameSink::createNew(env, rtpGroupsock, 19);
-        
-        ShmFrameSource *source = ShmFrameSource::createNew(env, NULL);
+    if (resultCode != 0) {
+    env << *rtspClient << "Failed to set up \n";
+    break;
+    }
 
-        sink->setPacketSizes(10, 1024);
-        sink->setStreamSocket(rtspClient->socketNum(), 0);
-        sink->startPlaying(*source, xvrShmAfterPlaying, sink);
+    env << *rtspClient << __LINE__ << " sendPlayCommand\n";
+    struct in_addr dummyDestAddress;
+    dummyDestAddress.s_addr = 0;
+    Groupsock* rtpGroupsock = new Groupsock(env, dummyDestAddress, 0, 0);
+    ShmFrameSink *sink = ShmFrameSink::createNew(env, rtpGroupsock, 19);
 
-        xvrClient->sendPlayCommand(*scs.mediaSession_, continueAfterXvrPLAY);
-    } while (0);
-  
-    delete[] resultString;
+    ShmFrameSource *source = ShmFrameSource::createNew(env, NULL);
+
+    sink->setPacketSizes(10, 1024);
+    sink->setStreamSocket(rtspClient->socketNum(), 0);
+    sink->startPlaying(*source, xvrShmAfterPlaying, sink);
+
+    xvrClient->sendPlayCommand(*scs.mediaSession_, continueAfterXvrPLAY);
+  } while (0);
+
+  delete[] resultString;
 }
 
 
 void continueAfterANNOUNCE(RTSPClient* rtspClient, int resultCode, char* resultString) {
-    do {
-        UsageEnvironment& env = rtspClient->envir(); // alias
-        xvrRTSPAnnounceClient *xvrClient = (xvrRTSPAnnounceClient*)rtspClient;
-        xvrSpeekClientState& scs = xvrClient->scs; // alias
+  do {
+    UsageEnvironment& env = rtspClient->envir(); // alias
+    xvrRTSPAnnounceClient *xvrClient = (xvrRTSPAnnounceClient*)rtspClient;
+    xvrSpeekClientState& scs = xvrClient->scs; // alias
 
-        if (resultCode != 0) {
-        env << *rtspClient << "continueAfterANNOUNCE fail: " << resultString << "\n";
-        delete[] resultString;
-        break;
-        }
+    if (resultCode != 0) {
+      env << *rtspClient << "continueAfterANNOUNCE fail: " << resultString << "\n";
+      delete[] resultString;
+      break;
+    }
 
-        scs.mediaSession_ = MediaSession::createNew(env, xvrClient->sdp_->c_str());
-        if (scs.mediaSession_ == NULL) break;
-        
-        MediaSubsessionIterator iter(*scs.mediaSession_);
-        while ((scs.mediaSubsession_ = iter.next()) != NULL) {
-          if (!scs.mediaSubsession_->initiate()) break;
-          
-            rtspClient->sendSetupCommand(*scs.mediaSubsession_, continueAfterXvrShmSETUP, False, REQUEST_STREAMING_OVER_TCP);
-            break;
-        }
-        
-        delete[] resultString;
-        return;
-    } while (0);
+    scs.mediaSession_ = MediaSession::createNew(env, xvrClient->sdp_->c_str());
+    if (scs.mediaSession_ == NULL) break;
 
-    // An unrecoverable error occurred with this stream.
-    shutdownXvrStream(rtspClient);
+    MediaSubsessionIterator iter(*scs.mediaSession_);
+    while ((scs.mediaSubsession_ = iter.next()) != NULL) {
+      if (!scs.mediaSubsession_->initiate()) break;
+
+      rtspClient->sendSetupCommand(*scs.mediaSubsession_, continueAfterXvrShmSETUP, False, REQUEST_STREAMING_OVER_TCP);
+      break;
+    }
+
+    delete[] resultString;
+    return;
+  } while (0);
+
+  // An unrecoverable error occurred with this stream.
+  shutdownXvrStream(rtspClient);
 }
 
 int announce_rtsp(UsageEnvironment& env, char const* progName, char const* rtspURL, char *dsp) {
