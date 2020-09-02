@@ -1,7 +1,10 @@
 #include "uv.h"
+#include <string>
+#include <sstream>
 #include "Base64.hh"
 #include "frameshm_manager.h"
 #include "xvrRTSPClient.h"
+#include "KULog.h"
 
 #define STREAM_SHM_SERV_NAME "av_serv"
 //#define VIDEO_FILE_TEST
@@ -50,10 +53,10 @@ void xvrRTSPConnectStatusTimer(UsageEnvironment& env, xvrRTSPClient* rtspClient)
   rtspClient->checkStatusTimerTask = env.taskScheduler().scheduleDelayedTask(uSecsToDelay, (TaskFunc*)StatusTimerHandler, rtspClient);
 }
 
-void xvrRTSPClientOpenURL(UsageEnvironment& env, char const* progName, char const* rtspURL) {
+void xvrRTSPClientOpenURL(UsageEnvironment& env, char const* progName, char const* rtspURL, int device_id, int venc_id) {
   // Begin by creating a "RTSPClient" object.  Note that there is a separate "RTSPClient" object for each stream that we wish
   // to receive (even if more than stream uses the same "rtsp://" URL).
-  xvrRTSPClient* rtspClient = xvrRTSPClient::createNew(env, rtspURL, RTSP_CLIENT_VERBOSITY_LEVEL, progName);
+  xvrRTSPClient* rtspClient = xvrRTSPClient::createNew(env, rtspURL, device_id, venc_id, RTSP_CLIENT_VERBOSITY_LEVEL, progName);
   if (rtspClient == NULL) {
     env << "Failed to create a RTSP client for URL \"" << rtspURL << "\": " << env.getResultMsg() << "\n";
     return;
@@ -108,8 +111,9 @@ void continueAfterXvrDESCRIBE(RTSPClient* rtspClient, int resultCode, char* resu
 }
 
 void setupNextXvrSubsession(RTSPClient* rtspClient) {
-  UsageEnvironment& env = rtspClient->envir(); // alias
-  xvrStreamClientState& scs = ((xvrRTSPClient*)rtspClient)->scs; // alias
+  UsageEnvironment& env = rtspClient->envir();
+  xvrRTSPClient* xvrRtspClient = static_cast<xvrRTSPClient*>(rtspClient);
+  xvrStreamClientState& scs = xvrRtspClient->scs;
   
   scs.subsession = scs.iter->next();
   if (scs.subsession != NULL) {
@@ -176,7 +180,8 @@ unsigned parseSPropParameterSets(std::vector<boost::shared_ptr<SPropRecord> > & 
 static void continueAfterXvrSETUP(RTSPClient* rtspClient, int resultCode, char* resultString) {
   do {
     UsageEnvironment& env = rtspClient->envir(); // alias
-    xvrStreamClientState& scs = ((xvrRTSPClient*)rtspClient)->scs; // alias
+    xvrRTSPClient* xvrRtspClient = static_cast<xvrRTSPClient*>(rtspClient);
+    xvrStreamClientState& scs = xvrRtspClient->scs;
 
     if (resultCode != 0) {
       env << *rtspClient << "Failed to set up the \"" << *scs.subsession << "\" subsession: " << resultString << "\n";
@@ -195,7 +200,13 @@ static void continueAfterXvrSETUP(RTSPClient* rtspClient, int resultCode, char* 
     // (This will prepare the data sink to receive data; the actual flow of data from the client won't start happening until later,
     // after we've sent a RTSP "PLAY" command.)
 
-    xvrDummySink *sink = xvrDummySink::createNew(env, *scs.subsession, rtspClient->url());
+    const char *streamid = NULL;
+    env << "device_id:" << xvrRtspClient->device_id_ << " venc_id:" << xvrRtspClient->venc_id_ << "\n";
+    if(xvrRtspClient->streamid_.length() > 0)
+    {
+      streamid = xvrRtspClient->streamid_.c_str();
+    }
+    xvrDummySink *sink = xvrDummySink::createNew(env, *scs.subsession, streamid, rtspClient->url());
     scs.subsession->sink = sink;
     
       // perhaps use your own custom "MediaSink" subclass instead
@@ -369,12 +380,55 @@ void shutdownXvrStream(RTSPClient* rtspClient, int exitCode) {
 
 xvrRTSPClient* xvrRTSPClient::createNew(UsageEnvironment& env, char const* rtspURL,
 					int verbosityLevel, char const* applicationName, portNumBits tunnelOverHTTPPortNum) {
-  return new xvrRTSPClient(env, rtspURL, verbosityLevel, applicationName, tunnelOverHTTPPortNum);
+  return new xvrRTSPClient(env, rtspURL, -1, -1, verbosityLevel, applicationName, tunnelOverHTTPPortNum);
 }
 
-xvrRTSPClient::xvrRTSPClient(UsageEnvironment& env, char const* rtspURL,
+xvrRTSPClient* xvrRTSPClient::createNew(UsageEnvironment& env, char const* rtspURL, int device_id, int venc_id,
+					int verbosityLevel, char const* applicationName, portNumBits tunnelOverHTTPPortNum) {
+  //return new xvrRTSPClient(env, rtspURL, device_id, venc_id, verbosityLevel, applicationName, tunnelOverHTTPPortNum);
+  std::stringstream stream_id;
+  if(device_id >= 0 && venc_id >= 0)
+  {
+    stream_id << "av"
+     << device_id
+     << "_"
+     << venc_id;
+  }
+  LOGI((char*)"xvrRTSPClient::createNew stream_id:%s\n", stream_id.str().c_str());
+  boost::shared_ptr<XvrRtspChannelDevice> channel
+    = XvrRtspChannelFactory::getInstance()->newRtspChannelDevice(stream_id.str());
+  if(!channel)
+  {
+    LOGI((char*)"newRtspChannelDevice fail");
+    return nullptr;
+  }
+  return new xvrRTSPClient(env, rtspURL, stream_id.str(), verbosityLevel, applicationName, tunnelOverHTTPPortNum, channel);
+}
+
+xvrRTSPClient::xvrRTSPClient(UsageEnvironment& env, char const* rtspURL, int device_id, int venc_id,
 			     int verbosityLevel, char const* applicationName, portNumBits tunnelOverHTTPPortNum)
-  : RTSPClient(env,rtspURL, verbosityLevel, applicationName, tunnelOverHTTPPortNum, -1) {
+  : RTSPClient(env,rtspURL, verbosityLevel, applicationName, tunnelOverHTTPPortNum, -1)
+  , device_id_(device_id)
+  , venc_id_(venc_id)
+{
+  //TODO
+  if(device_id >= 0 && venc_id >= 0)
+  {
+    streamid_ += "av";
+    streamid_ += device_id;
+    streamid_ += "_";
+    streamid_ += venc_id;
+  }
+}
+
+xvrRTSPClient::xvrRTSPClient(UsageEnvironment& env, char const* rtspURL, std::string stream_id,
+		int verbosityLevel, char const* applicationName, portNumBits tunnelOverHTTPPortNum,
+		boost::shared_ptr<XvrRtspChannelDevice> channel)
+  : RTSPClient(env,rtspURL, verbosityLevel, applicationName, tunnelOverHTTPPortNum, -1)
+  , streamid_(stream_id)
+  , channel_(channel)
+{
+  //TODO
 }
 
 xvrRTSPClient::~xvrRTSPClient() {
@@ -405,17 +459,18 @@ xvrStreamClientState::~xvrStreamClientState() {
 // Define the size of the buffer that we'll use:
 #define DUMMY_SINK_RECEIVE_BUFFER_SIZE (10*1024*1024/8)
 
-xvrDummySink* xvrDummySink::createNew(UsageEnvironment& env, MediaSubsession& subsession, char const* streamId) {
-  return new xvrDummySink(env, subsession, streamId);
+xvrDummySink* xvrDummySink::createNew(UsageEnvironment& env, MediaSubsession& subsession, char const* streamId, char const* url) {
+  return new xvrDummySink(env, subsession, streamId, url);
 }
 
-xvrDummySink::xvrDummySink(UsageEnvironment& env, MediaSubsession& subsession, char const* streamId)
+xvrDummySink::xvrDummySink(UsageEnvironment& env, MediaSubsession& subsession, char const* streamId, char const* url)
   : MediaSink(env)
     , fSubsession(subsession)
     , stream_valid(0)
     , vframe_no_(0)
     , aframe_no_(0) {
   fStreamId = strDup(streamId);
+  fUrl = strDup(url);
   //fReceiveBuffer = new u_int8_t[DUMMY_SINK_RECEIVE_BUFFER_SIZE];
   recv_buffer_.reset(new sg_xvr::Buffer(DUMMY_SINK_RECEIVE_BUFFER_SIZE, 1024));
     envir() << fSubsession.mediumName() << "/" << fSubsession.codecName() << "\n";
@@ -436,10 +491,10 @@ xvrDummySink::xvrDummySink(UsageEnvironment& env, MediaSubsession& subsession, c
     }
     
 #ifdef STREAM_SHM_ENABLE
-    //if(!streamshm_handle)
+    if(fStreamId)
     {
-      envir() << "create_frameshm_handle\n";
-      streamshm_handle = create_frameshm_handle(STREAM_SHM_SERV_NAME, "av0_0", DUMMY_SINK_RECEIVE_BUFFER_SIZE*3, WRITE_COVER_MODE);
+      envir() << "create_frameshm_handle:" << fStreamId << "\n";
+      streamshm_handle = create_frameshm_handle(STREAM_SHM_SERV_NAME, fStreamId, DUMMY_SINK_RECEIVE_BUFFER_SIZE*3, WRITE_COVER_MODE);
     }
 #endif
 }
@@ -463,12 +518,13 @@ void xvrDummySink::afterGettingFrame(void* clientData, unsigned frameSize, unsig
 }
 
 // If you don't want to see debugging output for each received frame, then comment out the following line:
-//#define DEBUG_PRINT_EACH_RECEIVED_FRAME
+#define DEBUG_PRINT_EACH_RECEIVED_FRAME
 
 void xvrDummySink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes,
     struct timeval presentationTime, unsigned /*durationInMicroseconds*/) {
   // We've just received a frame of data.  (Optionally) print out information about it:
 #ifdef DEBUG_PRINT_EACH_RECEIVED_FRAME
+  if (fUrl != NULL) envir() << "Url \"" << fUrl << "\"; ";
   if (fStreamId != NULL) envir() << "Stream \"" << fStreamId << "\"; ";
   envir() << fSubsession.mediumName() << "/" << fSubsession.codecName() << ":\tReceived " << frameSize << " bytes";
   if (numTruncatedBytes > 0) envir() << " (with " << numTruncatedBytes << " bytes truncated)";
@@ -551,20 +607,23 @@ void xvrDummySink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBy
 #endif
 
 #ifdef STREAM_SHM_ENABLE
-    frame_info.vench = 0;
-    frame_info.payload = 96;
-    frame_info.frame_type = nal_type;
-    frame_info.frame_no = vframe_no_++;
-    frame_info.frame_size = recv_buffer_->readableBytes();
-    frame_info.key = nal_type > 4 ? 1 : 0;
-    frame_info.timestamp = presentationTime.tv_usec + presentationTime.tv_sec*1000*1000;
+    if(streamshm_handle)
+    {
+      frame_info.vench = 0;
+      frame_info.payload = 96;
+      frame_info.frame_type = nal_type;
+      frame_info.frame_no = vframe_no_++;
+      frame_info.frame_size = recv_buffer_->readableBytes();
+      frame_info.key = nal_type > 4 ? 1 : 0;
+      frame_info.timestamp = presentationTime.tv_usec + presentationTime.tv_sec*1000*1000;
 
-    frame_data.pkt_num = 1;
-    frame_data.pkt = pkt;
-    pkt[0].addr = (uint8_t *)recv_buffer_->peek();
-    pkt[0].pkt_size = recv_buffer_->readableBytes();
-    r = write_frameshm_by_handle(streamshm_handle, &frame_info, &frame_data);
-    envir() << "write_frameshm_by_handle key:" << frame_info.key << " r:" << r << "\n";
+      frame_data.pkt_num = 1;
+      frame_data.pkt = pkt;
+      pkt[0].addr = (uint8_t *)recv_buffer_->peek();
+      pkt[0].pkt_size = recv_buffer_->readableBytes();
+      r = write_frameshm_by_handle(streamshm_handle, &frame_info, &frame_data);
+      envir() << "write_frameshm_by_handle key:" << frame_info.key << " r:" << r << "\n";
+    }
 #endif
   }
   else

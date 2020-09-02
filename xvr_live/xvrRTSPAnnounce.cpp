@@ -213,11 +213,11 @@ void ShmFrameSource::doGetNextFrame() {
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-void continueAfterXvrPLAY(RTSPClient* rtspClient, int resultCode, char* resultString) {
+static void continueAfterXvrShmPLAY(RTSPClient* rtspClient, int resultCode, char* resultString) {
 
 }
 
-void xvrShmAfterPlaying(void* clientData) {
+static void xvrShmAfterPlaying(void* clientData) {
   ShmFrameSink *sink = static_cast<ShmFrameSink *>(clientData);
 
 }
@@ -247,14 +247,14 @@ static void continueAfterXvrShmSETUP(RTSPClient* rtspClient, int resultCode, cha
     sink->setStreamSocket(rtspClient->socketNum(), 0);
     sink->startPlaying(*source, xvrShmAfterPlaying, sink);
 
-    xvrClient->sendPlayCommand(*scs.mediaSession_, continueAfterXvrPLAY);
+    xvrClient->sendPlayCommand(*scs.mediaSession_, continueAfterXvrShmPLAY);
   } while (0);
 
   delete[] resultString;
 }
 
 
-void continueAfterANNOUNCE(RTSPClient* rtspClient, int resultCode, char* resultString) {
+static void continueAfterANNOUNCE(RTSPClient* rtspClient, int resultCode, char* resultString) {
   do {
     UsageEnvironment& env = rtspClient->envir(); // alias
     xvrRTSPAnnounceClient *xvrClient = (xvrRTSPAnnounceClient*)rtspClient;

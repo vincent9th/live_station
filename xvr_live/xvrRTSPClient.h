@@ -7,6 +7,7 @@
 #include <vector>
 #include <string>
 #include "xvr_buffer.hpp"
+#include "xvrRTSPChannelFactory.h"
 
 // By default, we request that the server stream its data using RTP/UDP.
 // If, instead, you want to request that the server stream via RTP-over-TCP, change the following to True:
@@ -27,7 +28,6 @@ public:
   MediaSubsession* subsession;
   TaskToken streamTimerTask;
   double duration;
-
   //ServerMediaSession *speek_session_;
 };
 
@@ -42,10 +42,21 @@ public:
 				  int verbosityLevel = 0,
 				  char const* applicationName = NULL,
 				  portNumBits tunnelOverHTTPPortNum = 0);
+				  
+  static xvrRTSPClient* createNew(UsageEnvironment& env, char const* rtspURL,
+          int device_id, int venc_id,
+				  int verbosityLevel = 0,
+				  char const* applicationName = NULL,
+				  portNumBits tunnelOverHTTPPortNum = 0);
 
 protected:
-  xvrRTSPClient(UsageEnvironment& env, char const* rtspURL,
+  xvrRTSPClient(UsageEnvironment& env, char const* rtspURL, int device_id, int venc_id,
 		int verbosityLevel, char const* applicationName, portNumBits tunnelOverHTTPPortNum);
+		
+  xvrRTSPClient(UsageEnvironment& env, char const* rtspURL, std::string stream_id,
+		int verbosityLevel, char const* applicationName, portNumBits tunnelOverHTTPPortNum,
+		boost::shared_ptr<XvrRtspChannelDevice> channel);
+		
     // called only by createNew();
   virtual ~xvrRTSPClient();
 
@@ -54,6 +65,10 @@ public:
   TaskToken checkStatusTimerTask;
   bool stream_recved_flag_;
   boost::shared_ptr<std::string> sdp_;
+  int device_id_;
+  int venc_id_;
+  std::string streamid_;
+  boost::shared_ptr<XvrRtspChannelDevice> channel_;
 };
 
 
@@ -66,10 +81,10 @@ class xvrDummySink: public MediaSink {
 public:
   static xvrDummySink* createNew(UsageEnvironment& env,
 			      MediaSubsession& subsession, // identifies the kind of data that's being received
-			      char const* streamId = NULL); // identifies the stream itself (optional)
+			      char const* streamId = NULL, char const* url = NULL); // identifies the stream itself (optional)
 
 private:
-  xvrDummySink(UsageEnvironment& env, MediaSubsession& subsession, char const* streamId);
+  xvrDummySink(UsageEnvironment& env, MediaSubsession& subsession, char const* streamId, char const* url);
     // called only by "createNew()"
   virtual ~xvrDummySink();
 
@@ -92,7 +107,8 @@ private:
   //u_int8_t* fReceiveBuffer;
   boost::shared_ptr<sg_xvr::Buffer> recv_buffer_;
   MediaSubsession& fSubsession;
-  char* fStreamId;
+  char *fStreamId;
+  char *fUrl;
   void *streamshm_handle;
   uint16_t vframe_no_;
   uint16_t aframe_no_;
@@ -105,7 +121,7 @@ private:
 
 
 
-void xvrRTSPClientOpenURL(UsageEnvironment& env, char const* progName, char const* rtspURL);
+void xvrRTSPClientOpenURL(UsageEnvironment& env, char const* progName, char const* rtspURL, int device_id = -1, int venc_id = -1);
 // Other event handler functions:
 void xvrSubsessionAfterPlaying(void* clientData); // called when a stream's subsession (e.g., audio or video substream) ends
 void xvrSubsessionByeHandler(void* clientData, char const* reason);

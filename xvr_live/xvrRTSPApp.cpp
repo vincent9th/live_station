@@ -21,11 +21,15 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 // "openRTSP": http://www.live555.com/openRTSP/
 
 #include "xvrRTSPClient.h"
-
+#include "KULog.h"
+#include "sepcam_ipc_api.h"
+#include "KULog.h"
+#include "ipcnet_struct_internal.h"
 //using namespace std;
 //using namespace boost;
 
 // Forward function definitions:
+static int gPipe[2] = {-1, -1};
 
 int announce_rtsp(UsageEnvironment& env, char const* progName, char const* rtspURL, char *dsp);
 
@@ -36,24 +40,115 @@ void usage(UsageEnvironment& env, char const* progName) {
 
 char eventLoopWatchVariable = 0;
 
+/*void DevCheckTimerHandler(UsageEnvironment& env) {
+}
+
+void xvrDevConnectTimer(UsageEnvironment& env)
+{
+  env.taskScheduler().scheduleDelayedTask(uSecsToDelay, (TaskFunc*)DevCheckTimerHandler, env);
+}*/
+
+static void ipc_broadcast_inform_callback(void *loop_handle, char *src_name, uint16_t msg_type, void *data, size_t datalen)
+{
+  if(IPC_STATION_ADD_RTSP_DEVICE_REQ == msg_type)
+  {
+    if(sizeof(IPCNetStationRtspDevice_st) != datalen)
+    {
+      LOGE((char*)"sizeof(IPCNetStationRtspDevice_st):%d != datalen:%d", sizeof(IPCNetStationRtspDevice_st), datalen);
+      return;
+    }
+    
+    IPCNetStationRtspDevice_st *rtsp_device = (IPCNetStationRtspDevice_st*)data;
+    LOGI((char*)"rtsp channel num:%d", rtsp_device->__pri_ChannelCount);
+    for(int i = 0; i < rtsp_device->__pri_ChannelCount; ++i)
+    {
+      LOGI((char*)"i:%d uri:%s", i, rtsp_device->Channel[i].Uri);
+    }
+
+    
+  }
+  else
+  {
+  }
+}
+
+static int __nonblock_fcntl(int fd, int set) {
+  int flags;
+  int r;
+
+  do
+    r = fcntl(fd, F_GETFL);
+  while (r == -1 && errno == EINTR);
+
+  if (r == -1)
+    return -1;
+
+  /* Bail out now if already set/clear. */
+  if (!!(r & O_NONBLOCK) == !!set)
+    return 0;
+
+  if (set)
+    flags = r | O_NONBLOCK;
+  else
+    flags = r & ~O_NONBLOCK;
+
+  do
+    r = fcntl(fd, F_SETFL, flags);
+  while (r == -1 && errno == EINTR);
+
+  if (r)
+    return -1;
+
+  return 0;
+}
+
+static void create_socketpair(int fds [ 2 ])
+{
+  SocketPipe(fds);
+  __nonblock_fcntl(fds[0], 1);
+  __nonblock_fcntl(fds[1], 1);
+}
+
+static void pipeIncomingDataHandler(void* instance, int mask)
+{
+}
+
 int main(int argc, char** argv) {
 #if 1
   // Begin by setting up our usage environment:
   TaskScheduler* scheduler = BasicTaskScheduler::createNew();
   UsageEnvironment* env = BasicUsageEnvironment::createNew(*scheduler);
-
+  int r;
+  
+#if 1
   // We need at least one "rtsp://" URL argument:
   if (argc < 1) {
     usage(*env, argv[0]);
     return 1;
   }
-
   // There are argc-1 URLs: argv[1] through argv[argc-1].  Open and start streaming each one:
-  //for (int i = 1; i <= argc-1; ++i)
+  for (int i = 1; i <= argc-1; ++i)
   {
-    xvrRTSPClientOpenURL(*env, "live_station", argv[1]);
+    xvrRTSPClientOpenURL(*env, "live_station", argv[1], 0, 0);
+  }
+#endif
+
+  create_socketpair(gPipe);
+
+#if 0
+  r = sepcam_ipc_init((char*)"rtsp_cli");
+  if(r < 0)
+  {
+    //LOGE("sepcam_ipc_init FAIL");
+    return -1;
   }
 
+  ipcam_regist_broadcast_callback(ipc_broadcast_inform_callback);
+#endif
+
+  env->taskScheduler().setBackgroundHandling(gPipe[0], SOCKET_READABLE|SOCKET_EXCEPTION,
+					  (TaskScheduler::BackgroundHandlerProc*)&pipeIncomingDataHandler, NULL);
+					  
   // All subsequent activity takes place within the event loop:
   env->taskScheduler().doEventLoop(&eventLoopWatchVariable);
     // This function call does not return, unless, at some point in time, "eventLoopWatchVariable" gets set to something non-zero.
